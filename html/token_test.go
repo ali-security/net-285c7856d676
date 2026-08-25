@@ -626,6 +626,16 @@ var tokenTests = []tokenTest{
 		`<p a=/>`,
 		`<p a="/">`,
 	},
+	{
+		"duplicate attributes",
+		`<p foo="bar" foo="baz">`,
+		`<p foo="bar">`,
+	},
+	{
+		"duplicate attributes, different case",
+		`<p FOO="bar" foo="baz">`,
+		`<p foo="bar">`,
+	},
 }
 
 func TestTokenizer(t *testing.T) {
@@ -933,3 +943,43 @@ func benchmarkTokenizer(b *testing.B, level int) {
 func BenchmarkRawLevelTokenizer(b *testing.B)  { benchmarkTokenizer(b, rawLevel) }
 func BenchmarkLowLevelTokenizer(b *testing.B)  { benchmarkTokenizer(b, lowLevel) }
 func BenchmarkHighLevelTokenizer(b *testing.B) { benchmarkTokenizer(b, highLevel) }
+
+func TestUnicodeAttributeCase(t *testing.T) {
+	// <div a="1" A="1"> is resolved to <div a="1"> because a and A are considered
+	// duplicate attribute names. Different unicode cases are not considered equal
+	// though, so <div ä="1" Ä="1"> is tokenized as <div ä="1" Ä="1">.
+	f := `<div ä="1" Ä="1">`
+	z := NewTokenizer(strings.NewReader(f))
+	if tt := z.Next(); tt != StartTagToken {
+		t.Fatalf("expected StartTagToken, got %s", tt)
+	}
+	tok := z.Token()
+	if len(tok.Attr) != 2 {
+		t.Fatalf("expected 2 attributes, got %d", len(tok.Attr))
+	}
+	if tok.Attr[0].Key != "ä" {
+		t.Errorf("expected attribute key to be 'ä', got %s", tok.Attr[0].Key)
+	}
+	if tok.Attr[1].Key != "Ä" {
+		t.Errorf("expected attribute key to be 'Ä', got %s", tok.Attr[1].Key)
+	}
+}
+
+func TestDuplicateAttributeNotSmuggled(t *testing.T) {
+	// A browser keeps only the first of two attributes with the same name, so a
+	// filter that parses and re-renders must not carry the second, attacker
+	// controlled copy through: <a href="/safe" HREF="javascript:alert(1)"> has
+	// to round-trip as <a href="/safe">.
+	doc, err := Parse(strings.NewReader(`<a href="/safe" HREF="javascript:alert(1)">x</a>`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	buf := &bytes.Buffer{}
+	if err := Render(buf, doc); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	const want = `<html><head></head><body><a href="/safe">x</a></body></html>`
+	if got := buf.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
